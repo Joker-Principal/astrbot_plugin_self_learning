@@ -8,6 +8,8 @@ import re
 from pydantic import BaseModel, Field, field_validator
 from astrbot.api import logger
 
+from .json_utils import remove_thinking_content
+
 try:
     from guardrails import Guard
 except ImportError:
@@ -519,6 +521,9 @@ class GuardrailsManager:
         """
         通用 JSON 验证和清洗 - 适用于所有 LLM 返回
 
+        失败原因按类别记录（空响应 / 无 JSON 结构的纯文本 / JSON 损坏），
+        便于日志排查（issue #259）。
+
         Args:
             response_text: LLM 返回的文本（可能包含 Markdown、代码块等）
             expected_type: 期望的类型 ("object", "array", "auto")
@@ -529,7 +534,7 @@ class GuardrailsManager:
         try:
             # 检查输入是否为空
             if not response_text:
-                logger.error(f" [Guardrails] 输入为空，无法解析 JSON")
+                logger.error(f" [Guardrails] 输入为空（LLM 未返回内容），无法解析 JSON")
                 return None
 
             # 1. 移除 Markdown 代码块标记
@@ -537,6 +542,9 @@ class GuardrailsManager:
 
             # 记录原始响应长度用于调试
             logger.debug(f" [Guardrails] 原始响应长度: {len(response_text)}, 清理后长度: {len(cleaned_text)}")
+
+            # 0. 剥离思考标签（推理型模型常输出 <think> 等内容，会干扰 JSON 提取）
+            cleaned_text = remove_thinking_content(cleaned_text)
 
             # 移除 ```json 和 ``` 标记
             if cleaned_text.startswith("```json"):
@@ -551,7 +559,7 @@ class GuardrailsManager:
 
             # 检查清理后是否为空
             if not cleaned_text:
-                logger.warning(f" [Guardrails] 清理后的响应为空")
+                logger.warning(f" [Guardrails] 清理后的响应为空（可能仅包含思考内容或代码块标记）")
                 return None
 
             # 2. 尝试提取 JSON 部分（处理 LLM 可能在 JSON 前后加说明的情况）
@@ -561,6 +569,7 @@ class GuardrailsManager:
 
             json_match = re.search(json_pattern, cleaned_text, re.DOTALL)
             array_match = re.search(array_pattern, cleaned_text, re.DOTALL)
+            has_json_structure = bool(json_match or array_match)
 
             if expected_type == "object" or (expected_type == "auto" and json_match):
                 if json_match:
@@ -581,10 +590,15 @@ class GuardrailsManager:
             return parsed
 
         except json.JSONDecodeError as e:
-            # 显示响应预览用于调试
+            # 显示响应预览用于调试（warning 级别，便于用户从日志回贴定位）
             preview = cleaned_text[:200] if len(cleaned_text) > 200 else cleaned_text
-            logger.warning(f" [Guardrails] JSON 解析失败: {e}，尝试修复...")
-            logger.debug(f" [Guardrails] 响应预览: {preview}")
+            if has_json_structure:
+                logger.warning(f" [Guardrails] JSON 解析失败: {e}，尝试修复...")
+            else:
+                logger.warning(
+                    f" [Guardrails] 响应中未找到 JSON 结构（疑似纯文本回复）: {e}"
+                )
+            logger.warning(f" [Guardrails] 响应预览（前200字符）: {preview}")
 
             # 尝试修复常见的 JSON 错误
             try:
@@ -600,12 +614,42 @@ class GuardrailsManager:
                 return parsed
 
             except Exception as fix_error:
-                logger.error(f" [Guardrails] JSON 修复失败: {fix_error}")
-                return None
+                logger.warning(f" [Guardrails] 常规 JSON 修复失败: {fix_error}")
+
+            # 最后兜底：json-repair（AstrBot 环境通常自带；未安装时静默跳过）
+            repaired = self._json_repair_fallback(cleaned_text)
+            if repaired is not None:
+                logger.info(f" [Guardrails] json-repair 兜底解析成功")
+                return repaired
+
+            logger.error(f" [Guardrails] JSON 解析与修复全部失败，返回 None 交由上层降级")
+            return None
 
         except Exception as e:
             logger.error(f" [Guardrails] JSON 验证异常: {e}")
             return None
+
+    @staticmethod
+    def _json_repair_fallback(text: str) -> Optional[Any]:
+        """
+        使用 json-repair 库兜底修复（可选依赖，未安装时返回 None）
+
+        能处理截断的 JSON、未加引号的键、单引号、尾随逗号等常规正则修复覆盖不了的情况。
+        """
+        try:
+            from json_repair import repair_json
+        except ImportError:
+            return None
+
+        try:
+            repaired = repair_json(text, return_objects=True)
+        except Exception as e:
+            logger.debug(f" [Guardrails] json-repair 兜底失败: {e}")
+            return None
+
+        if repaired is None or repaired == "" or repaired == [] or repaired == {}:
+            return None
+        return repaired
 
     async def validate_llm_response(
         self,

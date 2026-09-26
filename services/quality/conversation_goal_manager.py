@@ -603,6 +603,16 @@ class ConversationGoalManager:
 
             logger.debug(f" [对话目标-分析初始目标] LLM Response: {response}")
 
+            # 空响应显式降级：LLM 未返回内容不是 JSON 格式问题，单独归类避免误导性报错（issue #259）
+            if not response or not str(response).strip():
+                logger.warning(" [对话目标-分析初始目标] 提炼模型未返回内容，使用默认目标降级")
+                return {
+                    "goal_type": "casual_chat",
+                    "topic": "闲聊",
+                    "confidence": 0.5,
+                    "reasoning": "模型未返回有效分析结果"
+                }
+
             # 消毒响应
             try:
                 sanitized_response, report = self.prompt_protection.sanitize_response(response)
@@ -610,6 +620,16 @@ class ConversationGoalManager:
             except Exception as sanitize_error:
                 logger.error(f"消毒响应失败: {sanitize_error}", exc_info=True)
                 sanitized_response = response # 使用原始响应
+
+            # 消毒后为空（如回复全部命中泄漏规则被清除），同样显式降级
+            if not sanitized_response or not str(sanitized_response).strip():
+                logger.warning(" [对话目标-分析初始目标] 消毒后响应为空，使用默认目标降级")
+                return {
+                    "goal_type": "casual_chat",
+                    "topic": "闲聊",
+                    "confidence": 0.5,
+                    "reasoning": "模型回复消毒后无有效内容"
+                }
 
             result = None
             if self.guardrails and self.GoalAnalysisResult:
@@ -932,6 +952,19 @@ Bot: {bot_response}
 
             logger.debug(f" [对话目标-意图分析] LLM Response: {response}")
 
+            # 空响应显式降级：LLM 未返回内容不是 JSON 格式问题，单独归类避免误导性报错（issue #259）
+            if not response or not str(response).strip():
+                logger.warning(" [对话目标-意图分析] 提炼模型未返回内容，使用默认意图分析降级")
+                return {
+                    "goal_switch_needed": False,
+                    "topic_completed": False,
+                    "stage_completed": False,
+                    "stage_adjustment_needed": False,
+                    "completion_signals": 0,
+                    "user_engagement": 0.5,
+                    "reasoning": "模型未返回有效分析结果"
+                }
+
             # 消毒响应
             try:
                 sanitized_response, report = self.prompt_protection.sanitize_response(response)
@@ -939,6 +972,19 @@ Bot: {bot_response}
             except Exception as sanitize_error:
                 logger.error(f"消毒响应失败: {sanitize_error}", exc_info=True)
                 sanitized_response = response # 使用原始响应
+
+            # 消毒后为空（如回复全部命中泄漏规则被清除），同样显式降级
+            if not sanitized_response or not str(sanitized_response).strip():
+                logger.warning(" [对话目标-意图分析] 消毒后响应为空，使用默认意图分析降级")
+                return {
+                    "goal_switch_needed": False,
+                    "topic_completed": False,
+                    "stage_completed": False,
+                    "stage_adjustment_needed": False,
+                    "completion_signals": 0,
+                    "user_engagement": 0.5,
+                    "reasoning": "模型回复消毒后无有效内容"
+                }
 
             analysis = None
             if self.guardrails and self.ConversationIntentAnalysis:
