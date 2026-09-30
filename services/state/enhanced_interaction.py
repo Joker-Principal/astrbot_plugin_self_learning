@@ -67,6 +67,8 @@ class EnhancedInteractionService(AsyncServiceBase):
         self.topic_suggestions = defaultdict(list)
         self.last_topic_guidance = defaultdict(float)
         self._last_topic_detection_counts: Dict[str, int] = {}
+        self._group_message_totals: Dict[str, int] = {}
+        self._topic_last_detect_time: Dict[str, float] = {}
         
     async def _do_start(self) -> bool:
         """启动增强交互服务"""
@@ -169,8 +171,13 @@ class EnhancedInteractionService(AsyncServiceBase):
             if len(context.messages) > 100:
                 context.messages = context.messages[-100:]
             
+            # 缓冲区会被截断到 100 条，限频基准必须用单调递增的按群累计消息数，
+            # 否则缓冲区饱和后话题检测会永久停止（issue #263）。
+            total_messages = self._group_message_totals.get(group_id, 0) + 1
+            self._group_message_totals[group_id] = total_messages
+
             # 检测话题变化。LLM话题检测需要限频，避免每条消息都调用筛选模型。
-            if self._should_detect_topic(group_id, len(context.messages)):
+            if self._should_detect_topic(group_id, total_messages):
                 new_topic = await self._detect_topic_change(context.messages)
                 if new_topic != context.current_topic:
                     context.current_topic = new_topic
@@ -195,6 +202,14 @@ class EnhancedInteractionService(AsyncServiceBase):
         last_count = self._last_topic_detection_counts.get(group_id, 0)
         if message_count - last_count < interval:
             return False
+        # 时间限频：活跃群消息增量很快满足，避免高频调用筛选模型（0 为禁用）
+        raw_min_interval = getattr(self.config, "topic_detection_min_interval_seconds", 300)
+        min_interval = 300 if raw_min_interval is None else max(0, int(raw_min_interval))
+        if min_interval > 0:
+            now = time.time()
+            if now - self._topic_last_detect_time.get(group_id, 0.0) < min_interval:
+                return False
+            self._topic_last_detect_time[group_id] = now
         self._last_topic_detection_counts[group_id] = message_count
         return True
     

@@ -107,6 +107,10 @@
       "topic_detection_interval_messages": {
         "description": "Topic detection trigger message count",
         "hint": "How many new messages per group trigger one LLM topic detection. Increase this to reduce filter model calls."
+      },
+      "topic_detection_min_interval_seconds": {
+        "description": "Topic detection minimum interval (seconds)",
+        "hint": "Minimum time between two LLM topic detections for the same group. Defaults to 300 seconds so active groups do not hammer the filter model; 0 disables."
       }
     },
     "Filter_Parameters": {
