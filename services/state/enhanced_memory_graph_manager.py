@@ -431,7 +431,7 @@ class EnhancedMemoryGraphManager:
                     for memory in memories:
                         # 从 metadata 解析概念和关联
                         try:
-                            metadata = json.loads(memory.metadata) if memory.metadata else {}
+                            metadata = json.loads(memory.metadata_) if memory.metadata_ else {}
                             concept = metadata.get('concept')
                             if concept:
                                 await memory_graph.add_memory_node(
@@ -439,6 +439,17 @@ class EnhancedMemoryGraphManager:
                                     memory.content,
                                     self.llm_adapter
                                 )
+                                # 还原持久化的权重与时间戳，避免重载后再保存时
+                                # 用默认 weight=1.0 覆盖原重要度
+                                node = memory_graph.G.nodes[concept]
+                                try:
+                                    node['weight'] = max(0.0, min(1.0, float(memory.importance) / 10))
+                                except (TypeError, ValueError):
+                                    pass
+                                if metadata.get('created_time') is not None:
+                                    node['created_time'] = metadata['created_time']
+                                if metadata.get('last_modified') is not None:
+                                    node['last_modified'] = metadata['last_modified']
                         except Exception as e:
                             logger.debug(f"[增强型记忆图] 解析记忆失败: {e}")
 
@@ -471,29 +482,74 @@ class EnhancedMemoryGraphManager:
                 async with self.db_manager.get_session() as session:
                     memory_repo = MemoryRepository(session)
 
+                    # 已有的概念记忆（concept -> 记录），自动保存时更新而非重复插入
+                    existing_records = {}
+                    try:
+                        records = await memory_repo.find_many(
+                            group_id=group_id,
+                            memory_type='concept',
+                            limit=None,
+                        )
+                        for record_item in records:
+                            try:
+                                record_meta = json.loads(record_item.metadata_) if record_item.metadata_ else {}
+                                record_concept = record_meta.get('concept')
+                                if record_concept:
+                                    existing_records[record_concept] = record_item
+                            except Exception:
+                                continue
+                    except Exception as e:
+                        logger.debug(f"[增强型记忆图] 读取已有概念记忆失败: {e}")
+
                     # 遍历所有节点保存
+                    total_nodes = 0
+                    saved_count = 0
                     for concept in memory_graph.G.nodes():
                         node_data = memory_graph.G.nodes[concept]
                         memory_items = node_data.get('memory_items', '')
 
-                        if memory_items:
-                            # 创建或更新记忆
-                            await memory_repo.create_memory(
+                        if not memory_items:
+                            continue
+                        total_nodes += 1
+
+                        try:
+                            importance = max(0, min(10, int(round(float(node_data.get('weight', 0.5)) * 10))))
+                        except (TypeError, ValueError):
+                            importance = 5
+
+                        node_metadata = json.dumps({
+                            'concept': concept,
+                            'created_time': node_data.get('created_time'),
+                            'last_modified': node_data.get('last_modified')
+                        })
+
+                        # 创建或更新记忆
+                        existing_record = existing_records.get(concept)
+                        if existing_record is not None:
+                            existing_record.content = memory_items
+                            existing_record.importance = importance
+                            existing_record.metadata_ = node_metadata
+                            existing_record.last_accessed = int(time.time())
+                            record = await memory_repo.update(existing_record)
+                        else:
+                            record = await memory_repo.create_memory(
                                 group_id=group_id,
                                 user_id='', # 群组级别记忆
                                 content=memory_items,
                                 memory_type='concept',
-                                importance=node_data.get('weight', 0.5),
-                                metadata=json.dumps({
-                                    'concept': concept,
-                                    'created_time': node_data.get('created_time'),
-                                    'last_modified': node_data.get('last_modified')
-                                })
+                                importance=importance,
+                                metadata=node_metadata
+                            )
+                        if record:
+                            saved_count += 1
+                        else:
+                            logger.warning(
+                                f"[增强型记忆图] 群组 {group_id} 概念节点 {concept} 保存失败"
                             )
 
                     logger.info(
                         f"[增强型记忆图] 群组 {group_id} 保存了 "
-                        f"{len(memory_graph.G.nodes())} 个概念节点"
+                        f"{saved_count}/{total_nodes} 个概念节点"
                     )
             else:
                 # 降级到原有实现
@@ -652,12 +708,19 @@ class EnhancedMemoryGraphManager:
                 async with self.db_manager.get_session() as session:
                     memory_repo = MemoryRepository(session)
 
-                    # 清理所有群组的30天前的低重要性记忆
+                    # memory_importance_threshold 为 0-1 浮点，记忆按 0-10 整数存储
+                    raw_days = getattr(self.config, 'memory_cleanup_days', 30)
+                    cleanup_days = 30 if raw_days is None else max(0, int(raw_days))
+                    raw_threshold = getattr(self.config, 'memory_importance_threshold', 0.3)
+                    raw_threshold = 0.3 if raw_threshold is None else float(raw_threshold)
+                    importance_threshold = max(0, min(10, int(round(raw_threshold * 10))))
+
+                    # 清理所有群组的过期的低重要性记忆
                     for group_id in self.memory_graphs.keys():
                         deleted = await memory_repo.clean_old_memories(
                             group_id=group_id,
-                            days=30,
-                            importance_threshold=0.3
+                            days=cleanup_days,
+                            importance_threshold=importance_threshold
                         )
                         logger.info(
                             f"[增强型记忆图] 群组 {group_id} 清理了 {deleted} 条旧记忆"
