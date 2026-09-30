@@ -207,6 +207,7 @@ class PluginConfig(BaseModel):
     expression_learning_trigger_messages: int = 10 # 表达方式学习触发消息增量
     expression_learning_min_interval_seconds: int = 3600 # 表达方式学习最小触发间隔（秒）
     topic_detection_interval_messages: int = 10 # 话题检测触发消息增量
+    topic_detection_min_interval_seconds: int = 300 # 话题检测最小触发间隔（秒）
 
     # 筛选参数
     message_min_length: int = 5 # 消息最小长度
@@ -510,6 +511,7 @@ class PluginConfig(BaseModel):
             expression_learning_trigger_messages=learning_params.get('expression_learning_trigger_messages', 10),
             expression_learning_min_interval_seconds=learning_params.get('expression_learning_min_interval_seconds', 3600),
             topic_detection_interval_messages=learning_params.get('topic_detection_interval_messages', 10),
+            topic_detection_min_interval_seconds=learning_params.get('topic_detection_min_interval_seconds', 300),
 
             message_min_length=filter_params.get('message_min_length', 5),
             message_max_length=filter_params.get('message_max_length', 500),
@@ -695,6 +697,9 @@ class PluginConfig(BaseModel):
 
         if self.topic_detection_interval_messages <= 0:
             errors.append("话题检测触发消息数必须大于0")
+
+        if self.topic_detection_min_interval_seconds < 0:
+            errors.append("话题检测最小触发间隔不能小于0秒")
 
         if self.provider_retry_interval_seconds <= 0:
             errors.append("Provider重试间隔必须大于0秒")

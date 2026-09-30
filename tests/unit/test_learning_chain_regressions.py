@@ -2103,14 +2103,136 @@ async def test_expression_pattern_save_handles_duplicate_existing_rows(tmp_path)
 @pytest.mark.unit
 def test_topic_detection_is_batch_gated():
     service = EnhancedInteractionService.__new__(EnhancedInteractionService)
-    service.config = SimpleNamespace(topic_detection_interval_messages=10)
+    service.config = SimpleNamespace(
+        topic_detection_interval_messages=10,
+        topic_detection_min_interval_seconds=0,
+    )
     service._last_topic_detection_counts = {}
+    service._topic_last_detect_time = {}
 
     assert service._should_detect_topic("group-a", 2) is False
     assert service._should_detect_topic("group-a", 9) is False
     assert service._should_detect_topic("group-a", 10) is True
     assert service._should_detect_topic("group-a", 19) is False
     assert service._should_detect_topic("group-a", 20) is True
+
+
+@pytest.mark.unit
+def test_topic_detection_is_time_gated():
+    service = EnhancedInteractionService.__new__(EnhancedInteractionService)
+    service.config = SimpleNamespace(
+        topic_detection_interval_messages=10,
+        topic_detection_min_interval_seconds=600,
+    )
+    service._last_topic_detection_counts = {}
+    service._topic_last_detect_time = {}
+
+    # 首次通过后，时间基准由 manage_conversation_context 在检测成功时落地
+    assert service._should_detect_topic("group-a", 10) is True
+    service._topic_last_detect_time["group-a"] = time.time()
+
+    # 消息增量满足但距上次成功检测不足最小间隔，应被时间限频拦截
+    assert service._should_detect_topic("group-a", 20) is False
+    # 时间限频拦截时不应推进消息计数基准，间隔过后仍可触发
+    assert service._last_topic_detection_counts["group-a"] == 10
+
+    service._topic_last_detect_time["group-a"] -= 600
+    assert service._should_detect_topic("group-a", 20) is True
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_topic_detection_failure_does_not_consume_time_window():
+    """检测失败（返回 None）不应记录时间基准，也不应吞掉后续重试。"""
+    service = EnhancedInteractionService.__new__(EnhancedInteractionService)
+    service.config = SimpleNamespace(
+        topic_detection_interval_messages=10,
+        topic_detection_min_interval_seconds=600,
+    )
+    service._logger = Mock()
+    service.conversation_contexts = {}
+    service._group_message_totals = {}
+    service._last_topic_detection_counts = {}
+    service._topic_last_detect_time = {}
+    service._detect_topic_change = AsyncMock(return_value=None)
+    service._update_conversation_emotion_state = AsyncMock()
+
+    async def send(text):
+        await service.manage_conversation_context(
+            "group-a",
+            {"sender_id": "u1", "message": text, "timestamp": time.time()},
+        )
+
+    for i in range(1, 21):
+        await send(f"失败重试消息{i}")
+
+    # 第 10、20 条各尝试一次：失败后仍按消息增量重试
+    assert service._detect_topic_change.await_count == 2
+    assert service._topic_last_detect_time == {}
+
+    service._detect_topic_change = AsyncMock(return_value="话题")
+    for i in range(21, 31):
+        await send(f"成功检测消息{i}")
+
+    # 新 mock 只在第 30 条（消息增量重新满足）被调用，成功后落地时间基准
+    assert service._detect_topic_change.await_count == 1
+    assert service._topic_last_detect_time["group-a"] > 0
+
+
+@pytest.mark.unit
+def test_context_cleanup_removes_topic_detection_bookkeeping():
+    """过期上下文被清理时，话题检测的按群簿记应一并移除。"""
+    service = EnhancedInteractionService.__new__(EnhancedInteractionService)
+    service.config = SimpleNamespace()
+    service.context_retention_time = 3600
+    service._logger = Mock()
+    service.conversation_contexts = {}
+    service._group_message_totals = {}
+    service._last_topic_detection_counts = {}
+    service._topic_last_detect_time = {}
+
+    service.conversation_contexts["group-a"] = SimpleNamespace(
+        last_activity=time.time() - 7200
+    )
+    service._group_message_totals["group-a"] = 42
+    service._last_topic_detection_counts["group-a"] = 40
+    service._topic_last_detect_time["group-a"] = time.time()
+
+    service._cleanup_expired_contexts()
+
+    assert "group-a" not in service.conversation_contexts
+    assert "group-a" not in service._group_message_totals
+    assert "group-a" not in service._last_topic_detection_counts
+    assert "group-a" not in service._topic_last_detect_time
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
+async def test_topic_detection_keeps_firing_after_buffer_saturation():
+    """缓冲区截断到 100 条后，话题检测仍须按消息增量持续触发（issue #263）。"""
+    service = EnhancedInteractionService.__new__(EnhancedInteractionService)
+    service.config = SimpleNamespace(
+        topic_detection_interval_messages=10,
+        topic_detection_min_interval_seconds=0,
+    )
+    service._logger = Mock()
+    service.conversation_contexts = {}
+    service._group_message_totals = {}
+    service._last_topic_detection_counts = {}
+    service._topic_last_detect_time = {}
+    service._detect_topic_change = AsyncMock(return_value="话题")
+    service._update_conversation_emotion_state = AsyncMock()
+
+    for i in range(1, 251):
+        await service.manage_conversation_context(
+            "group-a",
+            {"sender_id": f"u{i}", "message": f"m{i}", "timestamp": time.time()},
+        )
+
+    # 缓冲区仍被截断在 100 条，但单调计数器不受影响
+    assert len(service.conversation_contexts["group-a"].messages) == 100
+    assert service._group_message_totals["group-a"] == 250
+    assert service._detect_topic_change.await_count == 25
 
 
 @pytest.mark.unit

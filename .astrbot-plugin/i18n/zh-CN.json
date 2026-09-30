@@ -107,6 +107,10 @@
       "topic_detection_interval_messages": {
         "description": "话题检测触发消息数",
         "hint": "每个群每新增多少条消息才进行一次LLM话题检测。调大可降低筛选模型调用频率"
+      },
+      "topic_detection_min_interval_seconds": {
+        "description": "话题检测最小间隔(秒)",
+        "hint": "同一群两次LLM话题检测之间的最小间隔。默认300秒，避免活跃群在消息增量很快满足时高频调用筛选模型，0为禁用"
       }
     },
     "Filter_Parameters": {
