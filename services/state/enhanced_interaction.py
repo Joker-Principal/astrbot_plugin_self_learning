@@ -179,9 +179,13 @@ class EnhancedInteractionService(AsyncServiceBase):
             # 检测话题变化。LLM话题检测需要限频，避免每条消息都调用筛选模型。
             if self._should_detect_topic(group_id, total_messages):
                 new_topic = await self._detect_topic_change(context.messages)
-                if new_topic != context.current_topic:
-                    context.current_topic = new_topic
-                    self._logger.info(f"群组 {group_id} 话题变化: {context.current_topic}")
+                # 时间限频基准只在检测成功（返回非 None）后落地，
+                # 失败不吞掉整个时间窗口，下一批消息增量满足时可重试
+                if new_topic is not None:
+                    self._topic_last_detect_time[group_id] = time.time()
+                    if new_topic != context.current_topic:
+                        context.current_topic = new_topic
+                        self._logger.info(f"群组 {group_id} 话题变化: {context.current_topic}")
             
             # 更新情感状态
             await self._update_conversation_emotion_state(context, message)
@@ -202,14 +206,14 @@ class EnhancedInteractionService(AsyncServiceBase):
         last_count = self._last_topic_detection_counts.get(group_id, 0)
         if message_count - last_count < interval:
             return False
-        # 时间限频：活跃群消息增量很快满足，避免高频调用筛选模型（0 为禁用）
+        # 时间限频（0 为禁用）：活跃群消息增量很快满足，避免高频调用筛选模型。
+        # 这里只做检查不落地时间基准；基准由 manage_conversation_context 在
+        # 检测成功后写入，失败不会消耗整个时间窗口。
         raw_min_interval = getattr(self.config, "topic_detection_min_interval_seconds", 300)
         min_interval = 300 if raw_min_interval is None else max(0, int(raw_min_interval))
         if min_interval > 0:
-            now = time.time()
-            if now - self._topic_last_detect_time.get(group_id, 0.0) < min_interval:
+            if time.time() - self._topic_last_detect_time.get(group_id, 0.0) < min_interval:
                 return False
-            self._topic_last_detect_time[group_id] = now
         self._last_topic_detection_counts[group_id] = message_count
         return True
     
@@ -503,20 +507,28 @@ class EnhancedInteractionService(AsyncServiceBase):
             while True:
                 await asyncio.sleep(600)  # 10分钟清理一次
                 try:
-                    current_time = time.time()
-
-                    expired_contexts = [
-                        group_id for group_id, context in self.conversation_contexts.items()
-                        if current_time - context.last_activity > self.context_retention_time
-                    ]
-
-                    for group_id in expired_contexts:
-                        del self.conversation_contexts[group_id]
-                        self._logger.debug(f"清理过期对话上下文: {group_id}")
+                    self._cleanup_expired_contexts()
                 except Exception as e:
                     self._logger.error(f"上下文清理失败: {e}")
         except asyncio.CancelledError:
             self._logger.debug("上下文清理任务已取消")
+
+    def _cleanup_expired_contexts(self):
+        """清理过期对话上下文及其话题检测簿记"""
+        current_time = time.time()
+
+        expired_contexts = [
+            group_id for group_id, context in self.conversation_contexts.items()
+            if current_time - context.last_activity > self.context_retention_time
+        ]
+
+        for group_id in expired_contexts:
+            del self.conversation_contexts[group_id]
+            # 同步清理话题检测的按群簿记，避免不活跃群残留导致内存缓慢增长
+            self._group_message_totals.pop(group_id, None)
+            self._last_topic_detection_counts.pop(group_id, None)
+            self._topic_last_detect_time.pop(group_id, None)
+            self._logger.debug(f"清理过期对话上下文: {group_id}")
     
     async def _load_cross_group_memories(self):
         """加载跨群记忆数据"""
