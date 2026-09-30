@@ -223,6 +223,49 @@ async def test_save_memory_graph_persists_and_updates_concepts(tmp_path):
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_load_memory_graph_restores_weight_and_timestamps(tmp_path):
+    config = _make_config(tmp_path)
+    db = SQLAlchemyDatabaseManager(config)
+    now = time.time()
+
+    graph = MemoryGraph()
+    graph.G.add_node(
+        "概念A",
+        memory_items="内容A",
+        weight=0.7,
+        created_time=now,
+        last_modified=now,
+    )
+    manager = _make_manager(config, db, {"group-a": graph})
+
+    try:
+        assert await db.start() is True
+        await manager.save_memory_graph("group-a")
+
+        # 重启后重新加载：权重与时间戳应从持久化数据还原
+        reloaded = _make_manager(config, db, {})
+        await reloaded.load_memory_graph("group-a")
+
+        node = reloaded.memory_graphs["group-a"].G.nodes["概念A"]
+        assert abs(node["weight"] - 0.7) < 1e-9
+        assert abs(node["created_time"] - now) < 1e-6
+
+        # 重载后再保存不应把重要度覆盖成默认权重对应的 10
+        await reloaded.save_memory_graph("group-a")
+        async with db.get_session() as session:
+            row = (
+                await session.execute(
+                    select(Memory).where(Memory.memory_type == "concept")
+                )
+            ).scalars().first()
+            assert row is not None
+            assert row.importance == 7
+    finally:
+        await db.stop()
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_cleanup_task_uses_config_threshold_scale(tmp_path):
     config = _make_config(tmp_path)
     db = SQLAlchemyDatabaseManager(config)

@@ -439,6 +439,17 @@ class EnhancedMemoryGraphManager:
                                     memory.content,
                                     self.llm_adapter
                                 )
+                                # 还原持久化的权重与时间戳，避免重载后再保存时
+                                # 用默认 weight=1.0 覆盖原重要度
+                                node = memory_graph.G.nodes[concept]
+                                try:
+                                    node['weight'] = max(0.0, min(1.0, float(memory.importance) / 10))
+                                except (TypeError, ValueError):
+                                    pass
+                                if metadata.get('created_time') is not None:
+                                    node['created_time'] = metadata['created_time']
+                                if metadata.get('last_modified') is not None:
+                                    node['last_modified'] = metadata['last_modified']
                         except Exception as e:
                             logger.debug(f"[增强型记忆图] 解析记忆失败: {e}")
 
@@ -477,7 +488,7 @@ class EnhancedMemoryGraphManager:
                         records = await memory_repo.find_many(
                             group_id=group_id,
                             memory_type='concept',
-                            limit=1000,
+                            limit=None,
                         )
                         for record_item in records:
                             try:
@@ -698,8 +709,10 @@ class EnhancedMemoryGraphManager:
                     memory_repo = MemoryRepository(session)
 
                     # memory_importance_threshold 为 0-1 浮点，记忆按 0-10 整数存储
-                    cleanup_days = int(getattr(self.config, 'memory_cleanup_days', 30) or 30)
-                    raw_threshold = float(getattr(self.config, 'memory_importance_threshold', 0.3) or 0.3)
+                    raw_days = getattr(self.config, 'memory_cleanup_days', 30)
+                    cleanup_days = 30 if raw_days is None else max(0, int(raw_days))
+                    raw_threshold = getattr(self.config, 'memory_importance_threshold', 0.3)
+                    raw_threshold = 0.3 if raw_threshold is None else float(raw_threshold)
                     importance_threshold = max(0, min(10, int(round(raw_threshold * 10))))
 
                     # 清理所有群组的过期的低重要性记忆
