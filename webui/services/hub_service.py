@@ -318,25 +318,29 @@ class HubService:
         if collector and hasattr(collector, "collect_message"):
             collected = bool(await collector.collect_message(message_data))
         elif self.database_manager and hasattr(self.database_manager, "save_raw_message"):
-            try:
-                from ...core.interfaces import MessageData
-            except ImportError:
-                from core.interfaces import MessageData
+            # 与 MessageCollector.collect_message 相同的开关语义（issue #261）
+            if not getattr(self.config, "save_raw_messages", True):
+                collected = False
+            else:
+                try:
+                    from ...core.interfaces import MessageData
+                except ImportError:
+                    from core.interfaces import MessageData
 
-            collected = bool(
-                await self.database_manager.save_raw_message(
-                    MessageData(
-                        sender_id=sender_id,
-                        sender_name=sender_name,
-                        message=message,
-                        group_id=group_id,
-                        timestamp=timestamp,
-                        platform=message_data["platform"],
-                        message_id=message_data.get("message_id"),
-                        reply_to=message_data.get("reply_to"),
+                collected = bool(
+                    await self.database_manager.save_raw_message(
+                        MessageData(
+                            sender_id=sender_id,
+                            sender_name=sender_name,
+                            message=message,
+                            group_id=group_id,
+                            timestamp=timestamp,
+                            platform=message_data["platform"],
+                            message_id=message_data.get("message_id"),
+                            reply_to=message_data.get("reply_to"),
+                        )
                     )
                 )
-            )
 
         v2_result = None
         if payload.get("process_v2", True):

@@ -1127,6 +1127,53 @@ async def test_message_pipeline_collects_to_database_and_triggers_learning_paths
 
 @pytest.mark.unit
 @pytest.mark.asyncio
+async def test_collect_message_respects_save_raw_messages_switch(tmp_path):
+    async def collect_once(config):
+        db = SQLAlchemyDatabaseManager(config)
+        try:
+            assert await db.start() is True
+            collector = MessageCollectorService(
+                config,
+                context=None,
+                database_manager=db,
+            )
+            collected = await collector.collect_message(
+                {
+                    "sender_id": "user-a",
+                    "sender_name": "User A",
+                    "message": "保存开关测试消息",
+                    "group_id": "group-a",
+                    "timestamp": time.time(),
+                    "platform": "test",
+                }
+            )
+            stats = await collector.get_statistics("group-a")
+            return collected, stats["raw_messages"]
+        finally:
+            await db.stop()
+
+    config_off = PluginConfig(
+        data_dir=str(tmp_path),
+        db_type="sqlite",
+        enable_web_interface=False,
+        save_raw_messages=False,
+    )
+    collected, raw_count = await collect_once(config_off)
+    assert collected is False
+    assert raw_count == 0
+
+    config_on = PluginConfig(
+        data_dir=str(tmp_path),
+        db_type="sqlite",
+        enable_web_interface=False,
+    )
+    collected, raw_count = await collect_once(config_on)
+    assert collected is True
+    assert raw_count == 1
+
+
+@pytest.mark.unit
+@pytest.mark.asyncio
 async def test_expression_pattern_save_handles_duplicate_existing_rows(tmp_path):
     config = PluginConfig(
         data_dir=str(tmp_path),

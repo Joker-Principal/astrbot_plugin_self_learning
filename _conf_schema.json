@@ -268,7 +268,7 @@
       "save_raw_messages": {
         "description": "保存原始消息",
         "type": "bool",
-        "hint": "是否保存未经处理的原始消息用于分析",
+        "hint": "是否保存未经处理的原始消息。关闭后 raw_messages 表不再写入，渐进学习、黑话挖掘、社交分析等依赖该表的学习功能将没有新数据",
         "default": true
       },
       "auto_backup_interval_days": {

@@ -93,7 +93,7 @@ WebUI 会按 AstrBot Provider 类型过滤选项:
 | --- | --- | --- |
 | `debug_mode` | `false` | 启用性能监控；未指定日志等级时使用 debug |
 | `log_level` | `info` | `error`, `warning`, `info`, `debug` |
-| `save_raw_messages` | `true` | 保存原始消息 |
+| `save_raw_messages` | `true` | 保存原始消息；关闭后依赖 `raw_messages` 表的学习功能（渐进学习、黑话挖掘等）将没有新数据 |
 | `auto_backup_interval_days` | `7` | 自动备份间隔 |
 | `auto_apply_approved_persona` | `false` | 批准后自动应用到默认人格，风险较高 |
 
