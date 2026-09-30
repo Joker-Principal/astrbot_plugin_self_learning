@@ -150,7 +150,7 @@
       },
       "save_raw_messages": {
         "description": "Save raw messages",
-        "hint": "Whether to save unprocessed raw messages for analysis."
+        "hint": "Whether to save unprocessed raw messages. When disabled, the raw_messages table stops receiving new rows, so learning features that depend on it (progressive learning, jargon mining, social analysis) get no new data."
       },
       "auto_backup_interval_days": {
         "description": "Automatic backup interval (days)",
