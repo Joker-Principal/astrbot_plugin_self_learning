@@ -259,6 +259,33 @@ async def test_hub_ingest_message_supports_message_data_fallback(client):
 
 
 @pytest.mark.asyncio
+async def test_hub_ingest_message_fallback_respects_save_raw_messages(client):
+    container = hub_module.get_container()
+    plugin_config = container.plugin_config
+    database_manager = container.database_manager
+    plugin_config.save_raw_messages = False
+    try:
+        response = await client.post(
+            "/api/hub/v1/messages/ingest",
+            json={
+                "group_id": "group-a",
+                "sender_id": "user-a",
+                "sender_name": "Alice",
+                "message": "should not persist",
+                "platform": "companion",
+            },
+        )
+    finally:
+        del plugin_config.save_raw_messages
+
+    assert response.status_code == 200
+    data = await response.get_json()
+    assert data["success"] is True
+    assert data["data"]["collected"] is False
+    assert database_manager.saved_messages == []
+
+
+@pytest.mark.asyncio
 async def test_hub_learning_trigger_runs_background_and_wait_modes(client):
     async_response = await client.post(
         "/api/hub/v1/learning/trigger",

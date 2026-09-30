@@ -45,7 +45,7 @@ class MessageCollectorService:
     # 移除 _init_database 方法，因为数据库初始化现在由 DatabaseManager 负责
 
     async def collect_message(self, message_data: Dict[str, Any]) -> bool:
-        """收集消息并立即写入数据库（实时存储，确保外部API能获取到最新数据）"""
+        """收集消息并立即写入数据库；save_raw_messages 关闭时跳过持久化并返回 False"""
         try:
             # save_raw_messages 关闭时不落库原始消息（渐进学习、黑话挖掘等依赖
             # raw_messages 表的功能将不再产生新数据）
