@@ -13,8 +13,10 @@ class Memory(Base):
     group_id = Column(String(255), nullable=False, index=True)
     user_id = Column(String(255), nullable=False, index=True)
     content = Column(Text, nullable=False)
-    importance = Column(Integer, default=5, nullable=False)
+    importance = Column(Integer, default=5, nullable=False)  # 0-10 整数
     memory_type = Column(String(50), default='conversation')
+    tags = Column(Text, default='[]')  # 标签 JSON
+    metadata_ = Column('metadata', Text, default='{}')  # JSON格式的元数据，使用 metadata_ 避免与 SQLAlchemy 保留字冲突
     created_at = Column(BigInteger, nullable=False)
     last_accessed = Column(BigInteger, nullable=False)
     access_count = Column(Integer, default=0, nullable=False)

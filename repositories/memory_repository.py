@@ -25,7 +25,7 @@ class MemoryRepository(BaseRepository[Memory]):
         user_id: str,
         content: str,
         memory_type: str,
-        importance: float = 0.5,
+        importance: int = 5,
         tags: str = "[]",
         metadata: str = "{}"
     ) -> Optional[Memory]:
@@ -37,13 +37,14 @@ class MemoryRepository(BaseRepository[Memory]):
             user_id: 用户 ID
             content: 记忆内容
             memory_type: 记忆类型
-            importance: 重要性 (0-1)
+            importance: 重要性（0-10 整数）
             tags: 标签 JSON
             metadata: 元数据 JSON
 
         Returns:
-            Optional[Memory]: 记忆对象
+            Optional[Memory]: 记忆对象，创建失败时为 None
         """
+        importance = max(0, min(10, int(round(importance))))
         return await self.create(
             group_id=group_id,
             user_id=user_id,
@@ -51,11 +52,10 @@ class MemoryRepository(BaseRepository[Memory]):
             memory_type=memory_type,
             importance=importance,
             tags=tags,
-            metadata=metadata,
+            metadata_=metadata,
             access_count=0,
-            last_accessed_at=int(time.time()),
-            created_at=int(time.time()),
-            updated_at=int(time.time())
+            last_accessed=int(time.time()),
+            created_at=int(time.time())
         )
 
     async def get_by_type(
@@ -96,7 +96,7 @@ class MemoryRepository(BaseRepository[Memory]):
     async def get_important_memories(
         self,
         group_id: str,
-        threshold: float = 0.7,
+        threshold: int = 7,
         limit: int = 20
     ) -> List[Memory]:
         """
@@ -104,7 +104,7 @@ class MemoryRepository(BaseRepository[Memory]):
 
         Args:
             group_id: 群组 ID
-            threshold: 重要性阈值
+            threshold: 重要性阈值（0-10）
             limit: 返回数量
 
         Returns:
@@ -118,7 +118,7 @@ class MemoryRepository(BaseRepository[Memory]):
                 )
             ).order_by(
                 Memory.importance.desc(),
-                Memory.last_accessed_at.desc()
+                Memory.last_accessed.desc()
             ).limit(limit)
 
             result = await self.session.execute(stmt)
@@ -142,7 +142,7 @@ class MemoryRepository(BaseRepository[Memory]):
             memory = await self.get_by_id(memory_id)
             if memory:
                 memory.access_count += 1
-                memory.last_accessed_at = int(time.time())
+                memory.last_accessed = int(time.time())
                 await self.update(memory)
                 return True
             return False
@@ -155,7 +155,7 @@ class MemoryRepository(BaseRepository[Memory]):
         self,
         group_id: str,
         days: int = 30,
-        importance_threshold: float = 0.3
+        importance_threshold: int = 3
     ) -> int:
         """
         清理旧记忆
@@ -163,7 +163,7 @@ class MemoryRepository(BaseRepository[Memory]):
         Args:
             group_id: 群组 ID
             days: 保留天数
-            importance_threshold: 重要性阈值（低于此值的旧记忆会被删除）
+            importance_threshold: 重要性阈值（0-10，低于此值的旧记忆会被删除）
 
         Returns:
             int: 删除的记录数

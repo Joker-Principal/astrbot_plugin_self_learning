@@ -330,7 +330,7 @@ class PluginConfig(BaseModel):
     use_sqlalchemy: bool = True # 硬编码为 True，确保所有数据库操作使用 ORM 模型
     enable_memory_cleanup: bool = True # 启用记忆自动清理（每天凌晨3点）
     memory_cleanup_days: int = 30 # 记忆保留天数（低于阈值的旧记忆会被清理）
-    memory_importance_threshold: float = 0.3 # 记忆重要性阈值（低于此值的会被清理）
+    memory_importance_threshold: float = 0.3 # 记忆重要性阈值（0-1，低于此值的旧记忆会被清理；记忆按 0-10 整数存储）
 
     # Repository数据访问层配置（新增）
     default_review_limit: int = 50 # 默认审查记录查询数量

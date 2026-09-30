@@ -209,7 +209,7 @@ _EXTRA_SCHEMA_DEFINITION: Dict[str, Dict[str, Any]] = {
             "memory_importance_threshold": {
                 "description": "记忆重要性阈值",
                 "type": "float",
-                "hint": "低于该阈值的重要性记忆会被视为可清理",
+                "hint": "0-1 浮点，低于该值的旧记忆会被清理；记忆按 0-10 整数存储，内部会换算（如 0.3 → 低于 3 的旧记忆被清理）",
                 "default": 0.3,
             },
             "shutdown_step_timeout": {
