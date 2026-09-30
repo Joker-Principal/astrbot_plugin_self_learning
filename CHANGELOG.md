@@ -2,6 +2,33 @@
 
 所有重要更改都将记录在此文件中。
 
+## [4.2.7] - 2026-10-01
+
+### 修复：save_raw_messages 开关接入采集路径（issue #261）
+
+- `MessageCollector.collect_message` 入口检查 `save_raw_messages` 配置，关闭时跳过落库并返回 `False`；此前该开关只有声明没有任何消费点，设为 `false` 后 `raw_messages` 仍被无条件写入。
+- `HubService.ingest_message` 的无 collector 兜底路径（直接走 `database_manager.save_raw_message`）补同样的开关守卫，避免绕过。
+- `_conf_schema.json`、i18n（中/英）与 `docs/configuration.md` 的说明同步注明：关闭后 `raw_messages` 不再写入，渐进学习、黑话挖掘、社交分析等依赖该表的学习功能将没有新数据。
+- 新增回归测试：真实 sqlite 验证关闭时 0 行写入、开启时正常写入；hub 兜底路径同开关语义。
+
+### 修复：记忆图持久化恒失败与 memories.importance 量纲统一（issue #262、#264）
+
+- `MemoryRepository.create_memory` 此前向 ORM 传入 `tags`/`metadata`/`last_accessed_at`/`updated_at` 四个不存在的字段，`Base.create` 抛 `TypeError` 被吞掉返回 `None`，调用方仍打印成功日志——记忆图持久化静默失效。现补 `tags` 与 `metadata_` 列（沿用仓库 `metadata_` 命名惯例规避 SQLAlchemy 保留字，DB 列名仍为 `metadata`，缺失列由现有自动补列迁移处理），改用 `last_accessed` 列并去掉无中生有的 `updated_at`；`get_important_memories` 与 `update_access` 的 `last_accessed_at` 引用同步修正。
+- `save_memory_graph` 检查写入结果并输出 `成功/总数` 日志（不再打印与实际不符的成功信息）；按 concept 先查后更新，周期性自动保存不再重复插入；`load_memory_graph` 还原持久化的权重（importance/10）与 created_time/last_modified，重启后再保存不会用默认权重把重要度覆盖成 10；既有概念查重回读改为 `limit=None`，概念数超过 1000 的群不会因截断而重复插入。
+- `memories.importance` 保持 `Integer` 列，统一为 **0-10 整数量纲**：记忆图节点 weight（0-1）×10 映射并夹紧；`remember` 等整数写入方天然兼容。
+- 清理任务改读 `memory_cleanup_days` / `memory_importance_threshold` 配置（0-1 阈值 ×10 换算到 0-10 量纲），不再硬编码 30 天 / 0.3；显式 0 值不被回退吞掉；`_conf_schema.json` 与 WebUI 配置说明同步换算关系。
+- 新增真实 sqlite 回归测试：create_memory 真正落库、importance 夹紧、清理只删「超保留天数且低重要度」的行、记忆图保存幂等、清理阈值换算端到端生效、载入还原权重与时间戳。
+
+### 修复：话题检测在上下文缓冲饱和后永久停止（issue #263）
+
+- 话题检测限频基准此前取的是会截断到 100 条的缓冲区长度，缓冲区饱和后 `message_count - last_count` 恒为 0，群组话题检测从此不再触发。现维护按群单调递增的累计消息数作为基准，缓冲区截断不再影响触发节奏。
+- 新增配置 `topic_detection_min_interval_seconds`（默认 300 秒，0 为禁用）：修复后话题检测按「每 N 条消息一次」的真实节奏调用筛选模型，活跃群需要时间维度限频保护（参照表达方式学习 `expression_learning_min_interval_seconds` 惯例）。时间基准在检测成功后落地，LLM 失败不吞掉整个时间窗口；过期上下文清理时同步移除按群簿记，避免内存缓慢累积。
+- 新增回归测试：250 条消息把缓冲区压到上限后检测仍精确触发 25 次；时间限频与失败重试；清理簿记。
+
+### 版本
+
+- 版本号由 4.2.6 提升至 **4.2.7**。
+
 ## [4.2.6] - 2026-09-26
 
 ### 修复：对话目标分析 JSON 解析失败分类与修复能力（issue #259）
